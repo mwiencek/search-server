@@ -1,44 +1,67 @@
-FROM jetty:9.3.10
+FROM metabrainz/consul-template-base:0.18.2
 
 MAINTAINER Robert Kaye <rob@metabrainz.org>
 
-ENV SEARCH_HOME=/home/search
-ENV INDEXES_VERSION=1
-ENV RSYNC_PASSWORD=search
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends --no-install-suggests \
         bsdmainutils \
+        ca-certificates \
+        curl \
+        git \
+        maven \
+        openjdk-8-jdk \
         psmisc \
         python \
         rsync
 
-# Install consul template 
-COPY ./docker/prod/environment /etc/consul_template_env.sh
+ENV JAVA_HOME /usr/lib/jvm/java-8-openjdk-amd64
 
-COPY ./docker/prod/docker-helpers/install_consul_template.sh \
-     ./docker/prod/docker-helpers/install_runit.sh \
-     /usr/local/bin/
-RUN chmod 755 /usr/local/bin/install_consul_template.sh /usr/local/bin/install_runit.sh && \
-    sync && \
-    install_consul_template.sh && \
-    rm -f \
-        /usr/local/bin/install_consul_template.sh \
-        /usr/local/bin/install_runit.sh
+RUN cd /tmp && \
+    git clone https://github.com/metabrainz/mmd-schema.git && \
+    cd mmd-schema/brainz-mmd2-jaxb && \
+    mvn install && \
+    cd /
 
-WORKDIR $JETTY_HOME
+RUN groupadd -r jetty && \
+    useradd -r -g jetty jetty
 
-# Install the war file
-RUN curl -o $JETTY_HOME/webapps/ROOT.war ftp://data.musicbrainz.org/pub/musicbrainz/search/servlet/searchserver.war 
+ARG JETTY_VERSION=9.4.5.v20170502
+ARG JETTY_DIST=jetty-distribution-$JETTY_VERSION
 
-# Setup the data volumes/dirs
-VOLUME ["/home/search/indexes"]
+RUN cd /tmp && \
+    curl -o jetty.tar.gz http://central.maven.org/maven2/org/eclipse/jetty/jetty-distribution/$JETTY_VERSION/$JETTY_DIST.tar.gz && \
+    tar -xvzf jetty.tar.gz && \
+    mv $JETTY_DIST /usr/local/jetty && \
+    rm jetty.tar.gz
 
-COPY ./docker/prod/server/server.service /etc/sv/server/run
-RUN chmod 755 /etc/sv/server/run && \
-    ln -sf /etc/sv/server /etc/service/
+ENV JETTY_HOME /usr/local/jetty
+ENV PATH $JETTY_HOME/bin:$PATH
+ENV SEARCH_HOME=/home/search
+
+WORKDIR $SEARCH_HOME
+
+RUN mkdir search-server-code
+COPY pom.xml search-server-code/
+COPY index/ search-server-code/index/
+COPY servlet/ search-server-code/servlet/
+
+RUN cd search-server-code && \
+    sed -i 's/^\s*<module>updater<\/module>\s*$//g' pom.xml && \
+    mvn package && \
+    mv servlet/target/searchserver.war $JETTY_HOME/webapps/ROOT.war && \
+    cd $SEARCH_HOME && \
+    rm -rf search-server-code
+
+ENV INDEXES_VERSION=1
+ENV RSYNC_PASSWORD=search
+
+RUN mkdir bin
+COPY docker/server/server.sh bin/
+COPY docker/server/server.service /etc/service/server/run
+RUN chmod 755 /etc/service/server/run
 
 # Configuration
-COPY ./docker/prod/server/consul-template.conf /etc/consul-template.conf
-COPY ./docker/prod/server/consul_server.ini.ctmpl /code/consul_server.ini.ctmpl
-
-ENTRYPOINT ["/usr/local/bin/runsvinit"]
+COPY \
+    docker/server/consul-template-server.conf \
+    docker/server/RSYNC_SERVER.ctmpl \
+    /etc/

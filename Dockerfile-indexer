@@ -1,49 +1,53 @@
-FROM airdock/oracle-jdk:jdk-8u74
+FROM metabrainz/consul-template-base:0.18.2
 
 MAINTAINER Robert Kaye <rob@metabrainz.org>
 
-ENV SEARCH_HOME=/home/search
-ENV INDEXES_VERSION=1
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends --no-install-suggests \
+        bsdmainutils \
         ca-certificates \
         curl \
-	python \
-        rsync \
-        runit
+        git \
+        maven \
+        openjdk-8-jdk \
+        psmisc \
+        python \
+        rsync
 
-# Install consul template 
-COPY ./docker/prod/environment /etc/consul_template_env.sh
+ENV JAVA_HOME /usr/lib/jvm/java-8-openjdk-amd64
 
-COPY ./docker/prod/docker-helpers/install_consul_template.sh \
-     ./docker/prod/docker-helpers/install_runit.sh \
-     /usr/local/bin/
-RUN chmod 755 /usr/local/bin/install_consul_template.sh /usr/local/bin/install_runit.sh && \
-    sync && \
-    install_consul_template.sh && \
-    rm -f \
-        /usr/local/bin/install_consul_template.sh \
-        /usr/local/bin/install_runit.sh
+RUN cd /tmp && \
+    git clone https://github.com/metabrainz/mmd-schema.git && \
+    cd mmd-schema/brainz-mmd2-jaxb && \
+    mvn install && \
+    cd /
 
 # Install search indexer stuff
-WORKDIR /home/search
+ENV INDEXES_VERSION=1
+ENV SEARCH_HOME=/home/search
 
-RUN mkdir -p /home/search/rsync /home/search/bin
+WORKDIR $SEARCH_HOME
+
+RUN mkdir -p bin indexdata rsync
 COPY indexer/rsyncd.conf /etc
 COPY indexer/rsync.secrets /etc
 RUN chmod og-rw /etc/rsync.secrets
 
-# Install the war file
-RUN curl -o /home/search/index.jar ftp://data.musicbrainz.org/pub/musicbrainz/search/index/index.jar
+COPY index index-code
+RUN cd index-code && \
+    mvn package && \
+    cd $SEARCH_HOME && \
+    mv index-code/target/index-2.0-SNAPSHOT-jar-with-dependencies.jar index.jar && \
+    rm -rf index-code
 
-# Install the scripts 
-COPY ./docker/prod/indexer/build-indexes.sh /home/search/bin
-COPY ./docker/prod/indexer/indexer.service /etc/sv/indexer/run
-RUN chmod 755 /etc/sv/indexer/run && \
-    ln -sf /etc/sv/indexer /etc/service/
+# Install the scripts
+COPY \
+    docker/indexer/build-indexes.sh \
+    docker/indexer/indexer.py \
+    $SEARCH_HOME/bin/
+COPY docker/indexer/indexer.service /etc/service/indexer/run
+RUN chmod 755 /etc/service/indexer/run
 
 # Configuration
-COPY ./docker/prod/indexer/consul-template.conf /etc/consul-template.conf
-COPY ./docker/prod/indexer/consul_indexer_config.ini.ctmpl /code/consul_indexer_config.ini.ctmpl
-
-ENTRYPOINT ["/usr/local/bin/runsvinit"]
+COPY docker/indexer/consul-template-indexer.conf /etc/
+COPY docker/indexer/consul_indexer_config.ini.ctmpl /code/

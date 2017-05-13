@@ -1,0 +1,6 @@
+{{- $indexer_service := or (env "INDEXER_SERVICE_NAME") "search-indexer" -}}
+{{- if service $indexer_service -}}
+{{- with index (service $indexer_service) 0 -}}
+{{.Address}}:{{.Port}}
+{{- end -}}
+{{- end -}}

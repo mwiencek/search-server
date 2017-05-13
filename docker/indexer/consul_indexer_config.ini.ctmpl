@@ -1,0 +1,12 @@
+{{- $postgres_service := or (env "POSTGRES_SERVICE_NAME") "postgres-master" }}
+{{- $search_service := or (env "SEARCH_SERVICE_NAME") "search-server" }}
+{{- if service $postgres_service }}
+{{- with index (service $postgres_service) 0 }}
+pg_host={{.Address}}
+pg_port={{.Port}}
+pg_user=musicbrainz
+pg_passwd=musicbrainz
+pg_database={{ or (env "MUSICBRAINZ_DB_NAME") "musicbrainz_db" }}
+{{- end }}
+{{- end }}
+search-servers={{range (service $search_service)}}{{print .Address ","}}{{end}}

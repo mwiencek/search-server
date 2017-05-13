@@ -1,11 +1,11 @@
 #!/bin/bash
 
 CURRENT_TS=0
-INI_FILE=/code/consul_server.ini
+RSYNC_SERVER_FILE=/etc/RSYNC_SERVER
 
 while [ 1 ]
 do
-    if [ ! -e "$INI_FILE" ]
+    if [ ! -e "$RSYNC_SERVER_FILE" ]
     then
         sleep 1
         continue
@@ -15,14 +15,14 @@ done
 
 while [ 1 ]
 do
-    RSYNC_SERVER=`grep . $INI_FILE | awk '{$1=$1};1'`
+    RSYNC_SERVER=$(cat $RSYNC_SERVER_FILE)
     echo -n "connect rsync to $RSYNC_SERVER: "
     rsync rsync://search@$RSYNC_SERVER/data/$INDEXES_VERSION/ --list-only > /tmp/data-list
     if [ $? != "0" ]
-    then
-	echo "Failed to get list of data sets. sleeping"
-	sleep 30 
-	continue
+        then
+        echo "Failed to get list of data sets. sleeping"
+        sleep 30
+        continue
     fi
     cat /tmp/data-list
     TS=`cat /tmp/data-list | colrm 1 46 | grep -i . | sort -rn | head -1`
@@ -39,10 +39,10 @@ do
     mkdir -p $SEARCH_HOME/data/$TS
     rsync -rv rsync://search@$RSYNC_SERVER/data/$INDEXES_VERSION/$TS $SEARCH_HOME/data
     if [ $? != "0" ]
-    then
-	echo "Failure during sync of dataset. Starting over again."
-	sleep 5
-	continue
+        then
+        echo "Failure during sync of dataset. Starting over again."
+        sleep 5
+        continue
     fi
 
     # If we already have a data-set, check to see if we should delay the restart
@@ -80,12 +80,14 @@ do
     # this has got to be my favorite command EVAR
     echo "Kill the search server... \ø/"
     killall -9 java
-  
+
     # Start the search server again
     cd $JETTY_HOME
-    /docker-entrypoint.sh java -jar /usr/local/jetty/start.jar &
+    chpst -u jetty:jetty java $JAVA_OPTS -jar /usr/local/jetty/start.jar &
+    PID=$!
+    trap "kill $PID; wait $PID; exit" SIGTERM SIGINT
 
     # take a well deserved break!
     sleep 3
 
-done   
+done
